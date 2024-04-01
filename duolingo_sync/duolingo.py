@@ -448,6 +448,27 @@ class Duolingo(object):
         except:
             raise Exception('Could not get translations')
 
+    def get_user_url_by_id(self, fields=None):
+        if fields is None:
+            fields = []
+        url = 'https://www.duolingo.com/2017-06-30/users/{}'.format(self.user_data.id)
+        fields_params = requests.utils.requote_uri(','.join(fields))
+        if fields_params:
+            url += '?fields={}'.format(fields_params)
+        return url
+
+    def get_data_by_user_id(self, fields=None):
+        """
+        Get user's data from ``https://www.duolingo.com/2017-06-30/users/<user_id>``.
+        """
+        if fields is None:
+            fields = []
+        get = self._make_req(self.get_user_url_by_id(fields))
+        if get.status_code == 404:
+            raise RuntimeError('User not found')
+        else:
+            return get.json()
+
     def get_vocabulary(self, language_abbr=None):
         """Get overview of user's vocabulary in a language."""
         if not self.jwt:
@@ -455,11 +476,70 @@ class Duolingo(object):
         if language_abbr and not self._is_current_language(language_abbr):
             self._switch_language(language_abbr)
 
-        overview_url = "https://www.duolingo.com/vocabulary/overview"
-        overview_request = self._make_req(overview_url)
-        overview = overview_request.json()
+        # overview_url = "https://www.duolingo.com/vocabulary/overview"
+        # overview_request = self._make_req(overview_url)
+        # overview = overview_request.json()
+        #
+        # return overview
 
-        return overview
+        current_courses = self.get_data_by_user_id()["currentCourse"]["pathSectioned"]
+
+        progressed_skills = []
+        for section in current_courses:
+            completedUnits = section["completedUnits"]
+            units = section["units"]
+            for i in range(completedUnits):
+                unit = units[i]
+                levels = unit["levels"]
+                for l in levels:
+                    level_type = l["type"]
+                    # unit review doesnt contain new words
+                    if level_type in ["chest", "unit_review"]:
+                        continue
+                    pathLevelClientData = l["pathLevelClientData"]
+                    finishedSessions = l["finishedSessions"]
+                    if "skillId" in pathLevelClientData:
+                        skillId = pathLevelClientData["skillId"]
+                        new_obj = {
+                            "finishedLevels": 1,
+                            "finishedSessions": finishedSessions,
+                            "skillId": {
+                                "id": skillId
+                            }
+                        }
+                        progressed_skills.append(new_obj)
+                    elif "skillIds" in pathLevelClientData:
+                        skillIds = pathLevelClientData["skillIds"]
+                        for skillId in skillIds:
+                            new_obj = {
+                                "finishedLevels": 1,
+                                "finishedSessions": finishedSessions,
+                                "skillId": {
+                                    "id": skillId
+                                }
+                            }
+                            progressed_skills.append(new_obj)
+
+        # updated URL, default language to be english,
+        current_index = 0
+        data = []
+        while True:
+            overview_url = f"https://www.duolingo.com/2017-06-30/users/{self.user_data.id}/courses/{language_abbr}/en/learned-lexemes?sortBy=ALPHABETICAL&startIndex={current_index}"
+            overview_request = self._make_req(overview_url, data={
+                "lastTotalLexemeCount": 0,
+                "progressedSkills": progressed_skills
+            })
+            overview = overview_request.json()
+            learnedLexemes = overview['learnedLexemes']
+            data.extend(learnedLexemes)
+            pagination = overview['pagination']
+            totalLexemes = pagination['totalLexemes']
+            if len(data) >= totalLexemes:
+                break
+            # its not my database so i am being wasteful :)
+            nextStartIndex = pagination['nextStartIndex']
+            current_index = nextStartIndex
+        return data
 
     _cloudfront_server_url = None
     _homepage_text = None
